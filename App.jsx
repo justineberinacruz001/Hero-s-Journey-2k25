@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Sword, Zap, Clock, Plus, CheckCircle, Star, Trophy, Save, RotateCcw } from 'lucide-react';
 
-export default function HeroJourneyRPG() {
+export default function App() {
   // Load saved data or use defaults
   const loadData = () => {
     try {
