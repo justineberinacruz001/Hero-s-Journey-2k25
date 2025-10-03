@@ -10,6 +10,11 @@ export default function App() {
     epic: { label: 'Epic', xp: 100, coins: 90, color: 'bg-purple-500', textColor: 'text-purple-400' }
   };
 
+  // Calculate XP needed for a specific level (x1.25 scaling)
+  const calculateXPForLevel = (level) => {
+    return Math.floor(100 * Math.pow(1.25, level - 1));
+  };
+
   // Check if localStorage is available
   let storageAvailable = false;
   try {
@@ -28,7 +33,7 @@ export default function App() {
         name: "The Hero",
         level: 1,
         xp: 0,
-        xpToNextLevel: 100,
+        xpToNextLevel: 100, // Level 1 requires 100 XP
         gamingMinutes: 0,
         totalTasksCompleted: 0,
         isWeakened: false,
@@ -213,25 +218,29 @@ export default function App() {
       newWeaknessLevel = Math.max(0, hero.weaknessLevel - 1);
       if (newWeaknessLevel === 0) {
         newIsWeakened = false;
-        alert("💪 Your hero has recovered from weakness!");
+        alert("Your hero has recovered from weakness!");
       }
     }
 
-    const newXP = hero.xp + xpReward;
-    const newGamingMinutes = hero.gamingMinutes + coinsReward;
+    let newXP = hero.xp + xpReward;
     let newLevel = hero.level;
-    let xpForNextLevel = hero.xpToNextLevel;
+    let newXPForNextLevel = hero.xpToNextLevel;
 
-    if (newXP >= hero.xpToNextLevel) {
+    // Check for level up (with proper XP reset)
+    while (newXP >= newXPForNextLevel) {
+      newXP -= newXPForNextLevel; // Reset XP to overflow amount
       newLevel += 1;
-      xpForNextLevel = newLevel * 100;
+      newXPForNextLevel = calculateXPForLevel(newLevel);
+      alert(`Level Up! You are now Level ${newLevel}!`);
     }
+
+    const newGamingMinutes = hero.gamingMinutes + coinsReward;
 
     setHero({
       ...hero,
       xp: newXP,
       level: newLevel,
-      xpToNextLevel: xpForNextLevel,
+      xpToNextLevel: newXPForNextLevel,
       gamingMinutes: newGamingMinutes,
       totalTasksCompleted: hero.totalTasksCompleted + 1,
       isWeakened: newIsWeakened,
@@ -309,22 +318,52 @@ export default function App() {
   };
 
   const reportUnauthorizedGaming = (minutes) => {
-    if (!window.confirm(`Report ${minutes} minutes of unauthorized gaming? This will weaken your hero.`)) {
+    if (!window.confirm(`Report ${minutes} minutes of unauthorized gaming? This will severely punish your hero.`)) {
       return;
     }
 
     const xpPenalty = minutes * 5; // Lose 5 XP per minute
-    const newXP = Math.max(0, hero.xp - xpPenalty);
-    const newWeaknessLevel = hero.weaknessLevel + Math.ceil(minutes / 30); // +1 weakness per 30 min
+    const timePenalty = Math.floor(minutes * 1.2); // Lose 1.2x time from bank
+    
+    let newXP = hero.xp - xpPenalty;
+    let newLevel = hero.level;
+    let newXPForNextLevel = hero.xpToNextLevel;
+
+    // Handle level demotion if XP goes negative
+    while (newXP < 0 && newLevel > 1) {
+      newLevel -= 1;
+      newXPForNextLevel = calculateXPForLevel(newLevel);
+      newXP += newXPForNextLevel; // Add previous level's max XP
+    }
+
+    // If still negative at level 1, set to 0
+    if (newXP < 0) {
+      newXP = 0;
+    }
+
+    const newGamingMinutes = Math.max(0, hero.gamingMinutes - timePenalty);
+    const newWeaknessLevel = hero.weaknessLevel + Math.ceil(minutes / 30);
 
     setHero({
       ...hero,
       xp: newXP,
+      level: newLevel,
+      xpToNextLevel: newXPForNextLevel,
+      gamingMinutes: newGamingMinutes,
       isWeakened: true,
       weaknessLevel: newWeaknessLevel
     });
 
-    alert(`⚠️ Your hero lost ${xpPenalty} XP and gained weakness! Complete tasks to recover.`);
+    let message = `⚠️ Penalty Applied:\n`;
+    message += `- Lost ${xpPenalty} XP\n`;
+    message += `- Lost ${timePenalty} minutes from gaming bank\n`;
+    message += `- Weakness increased to level ${newWeaknessLevel}`;
+    
+    if (hero.level !== newLevel) {
+      message += `\n- DEMOTED to Level ${newLevel}!`;
+    }
+
+    alert(message);
   };
 
   const addCustomTask = () => {
@@ -532,6 +571,9 @@ export default function App() {
                   className="h-full bg-gradient-to-r from-green-400 to-blue-500 transition-all duration-500"
                   style={{ width: `${xpPercentage}%` }}
                 />
+              </div>
+              <div className="text-xs text-gray-400 mt-1 text-right">
+                Next level: {calculateXPForLevel(hero.level + 1)} XP required
               </div>
             </div>
 
