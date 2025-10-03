@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Sword, Zap, Clock, Plus, CheckCircle, Star, Trophy, Save, RotateCcw, Flame, Target, Award } from 'lucide-react';
+import { Sword, Zap, Clock, Plus, CheckCircle, Star, Trophy, Save, RotateCcw, Flame, Target, Award, Play, Pause, StopCircle, AlertTriangle, Skull } from 'lucide-react';
 
 export default function App() {
   // Difficulty presets
@@ -30,7 +30,9 @@ export default function App() {
         xp: 0,
         xpToNextLevel: 100,
         gamingMinutes: 0,
-        totalTasksCompleted: 0
+        totalTasksCompleted: 0,
+        isWeakened: false,
+        weaknessLevel: 0
       },
       tasks: [
         { id: 1, name: "Code for 30 minutes", difficulty: 'medium', completed: false, category: "coding", completedToday: false },
@@ -44,6 +46,14 @@ export default function App() {
         lastCompletedDate: null,
         tasksCompletedToday: 0,
         dailyGoal: 4
+      },
+      gamingSession: {
+        isActive: false,
+        remainingSeconds: 0,
+        totalSeconds: 0,
+        isPaused: false,
+        startTime: null,
+        totalGamingToday: 0
       }
     };
 
@@ -55,30 +65,29 @@ export default function App() {
       const savedHero = localStorage.getItem('heroData');
       const savedTasks = localStorage.getItem('tasksData');
       const savedStreaks = localStorage.getItem('streakData');
+      const savedSession = localStorage.getItem('gamingSession');
       
       let loadedTasks = defaults.tasks;
       
-      // Handle old task format that had xp/coins directly on tasks
       if (savedTasks) {
         const parsed = JSON.parse(savedTasks);
         loadedTasks = parsed.map(task => {
-          // If task has xp/coins but no difficulty, it's old format - reset to defaults
           if ((task.xp || task.coins) && !task.difficulty) {
             return null;
           }
           return task;
         }).filter(Boolean);
         
-        // If all tasks were invalid, use defaults
         if (loadedTasks.length === 0) {
           loadedTasks = defaults.tasks;
         }
       }
       
       return {
-        hero: savedHero ? JSON.parse(savedHero) : defaults.hero,
+        hero: savedHero ? { ...defaults.hero, ...JSON.parse(savedHero) } : defaults.hero,
         tasks: loadedTasks,
-        streaks: savedStreaks ? JSON.parse(savedStreaks) : defaults.streaks
+        streaks: savedStreaks ? JSON.parse(savedStreaks) : defaults.streaks,
+        gamingSession: savedSession ? JSON.parse(savedSession) : defaults.gamingSession
       };
     } catch (error) {
       console.error('Error loading data:', error);
@@ -90,22 +99,63 @@ export default function App() {
   const [hero, setHero] = useState(initialData.hero);
   const [tasks, setTasks] = useState(initialData.tasks);
   const [streaks, setStreaks] = useState(initialData.streaks);
+  const [gamingSession, setGamingSession] = useState(initialData.gamingSession);
   const [newTaskName, setNewTaskName] = useState("");
   const [newTaskDifficulty, setNewTaskDifficulty] = useState("medium");
   const [newTaskCategory, setNewTaskCategory] = useState("custom");
   const [showAddTask, setShowAddTask] = useState(false);
   const [saveStatus, setSaveStatus] = useState("");
+  const [customMinutes, setCustomMinutes] = useState(30);
+  const [showCustomTime, setShowCustomTime] = useState(false);
 
-  // Auto-save whenever hero, tasks, or streaks change
+  // Gaming timer countdown
   useEffect(() => {
-    if (!storageAvailable) {
-      return;
-    }
+    if (!gamingSession.isActive || gamingSession.isPaused) return;
+
+    const interval = setInterval(() => {
+      setGamingSession(prev => {
+        const newRemaining = prev.remainingSeconds - 1;
+
+        // Time warning at 5 minutes
+        if (newRemaining === 300) {
+          alert("⚠️ 5 minutes of gaming time remaining!");
+        }
+
+        // Time warning at 1 minute
+        if (newRemaining === 60) {
+          alert("⚠️ 1 minute of gaming time remaining!");
+        }
+
+        // Time's up!
+        if (newRemaining <= 0) {
+          alert("⏰ Gaming time is up! Your hero needs rest.");
+          return {
+            ...prev,
+            isActive: false,
+            remainingSeconds: 0,
+            isPaused: false
+          };
+        }
+
+        return {
+          ...prev,
+          remainingSeconds: newRemaining
+        };
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [gamingSession.isActive, gamingSession.isPaused]);
+
+  // Auto-save whenever state changes
+  useEffect(() => {
+    if (!storageAvailable) return;
     
     try {
       localStorage.setItem('heroData', JSON.stringify(hero));
       localStorage.setItem('tasksData', JSON.stringify(tasks));
       localStorage.setItem('streakData', JSON.stringify(streaks));
+      localStorage.setItem('gamingSession', JSON.stringify(gamingSession));
       setSaveStatus("✓ Saved");
       const timer = setTimeout(() => setSaveStatus(""), 2000);
       return () => clearTimeout(timer);
@@ -113,7 +163,7 @@ export default function App() {
       console.error('Error saving data:', error);
       setSaveStatus("✗ Save failed");
     }
-  }, [hero, tasks, streaks, storageAvailable]);
+  }, [hero, tasks, streaks, gamingSession, storageAvailable]);
 
   // Check for daily reset
   useEffect(() => {
@@ -122,10 +172,9 @@ export default function App() {
       const lastDate = streaks.lastCompletedDate;
       
       if (lastDate && lastDate !== today) {
-        // Reset daily completions
         setTasks(prevTasks => prevTasks.map(t => ({ ...t, completedToday: false })));
+        setGamingSession(prev => ({ ...prev, totalGamingToday: 0 }));
         
-        // Check if streak should break
         const yesterday = new Date();
         yesterday.setDate(yesterday.getDate() - 1);
         if (lastDate !== yesterday.toDateString()) {
@@ -153,16 +202,26 @@ export default function App() {
     let coinsReward = diff.coins;
 
     // Streak bonus
-    const streakBonus = Math.floor(streaks.current * 0.1); // 10% bonus per streak day
+    const streakBonus = Math.floor(streaks.current * 0.1);
     xpReward = Math.floor(xpReward * (1 + streakBonus));
     coinsReward = Math.floor(coinsReward * (1 + streakBonus));
+
+    // Reduce weakness if hero is weakened
+    let newWeaknessLevel = hero.weaknessLevel;
+    let newIsWeakened = hero.isWeakened;
+    if (hero.isWeakened) {
+      newWeaknessLevel = Math.max(0, hero.weaknessLevel - 1);
+      if (newWeaknessLevel === 0) {
+        newIsWeakened = false;
+        alert("💪 Your hero has recovered from weakness!");
+      }
+    }
 
     const newXP = hero.xp + xpReward;
     const newGamingMinutes = hero.gamingMinutes + coinsReward;
     let newLevel = hero.level;
     let xpForNextLevel = hero.xpToNextLevel;
 
-    // Level up logic
     if (newXP >= hero.xpToNextLevel) {
       newLevel += 1;
       xpForNextLevel = newLevel * 100;
@@ -174,15 +233,15 @@ export default function App() {
       level: newLevel,
       xpToNextLevel: xpForNextLevel,
       gamingMinutes: newGamingMinutes,
-      totalTasksCompleted: hero.totalTasksCompleted + 1
+      totalTasksCompleted: hero.totalTasksCompleted + 1,
+      isWeakened: newIsWeakened,
+      weaknessLevel: newWeaknessLevel
     });
 
-    // Update task completion
     setTasks(tasks.map(t => 
       t.id === taskId ? { ...t, completed: true, completedToday: true } : t
     ));
 
-    // Update streaks
     const newTasksToday = streaks.tasksCompletedToday + 1;
     const today = new Date().toDateString();
     
@@ -199,12 +258,73 @@ export default function App() {
       tasksCompletedToday: newTasksToday
     });
 
-    // Reset task after 2 seconds
     setTimeout(() => {
       setTasks(prevTasks => prevTasks.map(t => 
         t.id === taskId ? { ...t, completed: false } : t
       ));
     }, 2000);
+  };
+
+  const startGamingSession = (minutes) => {
+    if (hero.gamingMinutes < minutes) {
+      alert("Not enough gaming minutes! Complete more tasks first.");
+      return;
+    }
+
+    setHero({ ...hero, gamingMinutes: hero.gamingMinutes - minutes });
+    setGamingSession({
+      isActive: true,
+      remainingSeconds: minutes * 60,
+      totalSeconds: minutes * 60,
+      isPaused: false,
+      startTime: new Date().toISOString(),
+      totalGamingToday: gamingSession.totalGamingToday + minutes
+    });
+    setShowCustomTime(false);
+  };
+
+  const pauseGamingSession = () => {
+    setGamingSession(prev => ({ ...prev, isPaused: true }));
+  };
+
+  const resumeGamingSession = () => {
+    setGamingSession(prev => ({ ...prev, isPaused: false }));
+  };
+
+  const endGamingSession = () => {
+    if (window.confirm("End gaming session early? Unused time will be returned.")) {
+      const minutesUsed = Math.ceil((gamingSession.totalSeconds - gamingSession.remainingSeconds) / 60);
+      const minutesUnused = Math.floor(gamingSession.remainingSeconds / 60);
+      
+      setHero(prev => ({ ...prev, gamingMinutes: prev.gamingMinutes + minutesUnused }));
+      setGamingSession({
+        isActive: false,
+        remainingSeconds: 0,
+        totalSeconds: 0,
+        isPaused: false,
+        startTime: null,
+        totalGamingToday: gamingSession.totalGamingToday - minutesUnused
+      });
+    }
+  };
+
+  const reportUnauthorizedGaming = (minutes) => {
+    if (!window.confirm(`Report ${minutes} minutes of unauthorized gaming? This will weaken your hero.`)) {
+      return;
+    }
+
+    const xpPenalty = minutes * 5; // Lose 5 XP per minute
+    const newXP = Math.max(0, hero.xp - xpPenalty);
+    const newWeaknessLevel = hero.weaknessLevel + Math.ceil(minutes / 30); // +1 weakness per 30 min
+
+    setHero({
+      ...hero,
+      xp: newXP,
+      isWeakened: true,
+      weaknessLevel: newWeaknessLevel
+    });
+
+    alert(`⚠️ Your hero lost ${xpPenalty} XP and gained weakness! Complete tasks to recover.`);
   };
 
   const addCustomTask = () => {
@@ -232,26 +352,29 @@ export default function App() {
     }
   };
 
-  const spendGamingTime = (minutes) => {
-    if (hero.gamingMinutes >= minutes) {
-      setHero({ ...hero, gamingMinutes: hero.gamingMinutes - minutes });
-      alert(`Enjoy your ${minutes} minutes of gaming! 🎮`);
-    }
-  };
-
   const resetProgress = () => {
     if (window.confirm("Reset all progress? This cannot be undone!")) {
       if (storageAvailable) {
         localStorage.removeItem('heroData');
         localStorage.removeItem('tasksData');
         localStorage.removeItem('streakData');
+        localStorage.removeItem('gamingSession');
       }
       window.location.reload();
     }
   };
 
+  const formatTime = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
   const xpPercentage = (hero.xp / hero.xpToNextLevel) * 100;
   const dailyProgress = (streaks.tasksCompletedToday / streaks.dailyGoal) * 100;
+  const timerPercentage = gamingSession.totalSeconds > 0 
+    ? (gamingSession.remainingSeconds / gamingSession.totalSeconds) * 100 
+    : 0;
 
   const getCategoryColor = (category) => {
     const colors = {
@@ -298,11 +421,67 @@ export default function App() {
               </span>
             )}
           </div>
-          <p className="text-purple-300">Complete Tasks • Earn Rewards • Build Streaks • Control Your Gaming</p>
-          {!storageAvailable && (
-            <p className="text-xs text-yellow-400 mt-2">⚠️ Storage unavailable - progress won't save in this environment</p>
-          )}
+          <p className="text-purple-300">Complete Tasks • Earn Rewards • Control Your Gaming</p>
         </div>
+
+        {/* Active Gaming Timer */}
+        {gamingSession.isActive && (
+          <div className="bg-gradient-to-r from-red-900 to-orange-900 rounded-lg p-6 mb-6 border-4 border-red-500 shadow-2xl animate-pulse">
+            <div className="text-center mb-4">
+              <h2 className="text-3xl font-bold mb-2">🎮 GAMING SESSION ACTIVE</h2>
+              <div className="text-6xl font-mono font-bold text-yellow-400 mb-4">
+                {formatTime(gamingSession.remainingSeconds)}
+              </div>
+              <div className="h-6 bg-red-950 rounded-full overflow-hidden mb-4">
+                <div 
+                  className="h-full bg-gradient-to-r from-green-400 via-yellow-400 to-red-500 transition-all duration-1000"
+                  style={{ width: `${timerPercentage}%` }}
+                />
+              </div>
+            </div>
+            <div className="flex gap-3 justify-center">
+              {!gamingSession.isPaused ? (
+                <button
+                  onClick={pauseGamingSession}
+                  className="bg-yellow-600 hover:bg-yellow-500 px-6 py-3 rounded-lg font-bold flex items-center gap-2"
+                >
+                  <Pause className="w-5 h-5" />
+                  Pause
+                </button>
+              ) : (
+                <button
+                  onClick={resumeGamingSession}
+                  className="bg-green-600 hover:bg-green-500 px-6 py-3 rounded-lg font-bold flex items-center gap-2"
+                >
+                  <Play className="w-5 h-5" />
+                  Resume
+                </button>
+              )}
+              <button
+                onClick={endGamingSession}
+                className="bg-red-600 hover:bg-red-500 px-6 py-3 rounded-lg font-bold flex items-center gap-2"
+              >
+                <StopCircle className="w-5 h-5" />
+                End Session
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Weakness Warning */}
+        {hero.isWeakened && (
+          <div className="bg-gradient-to-r from-gray-800 to-gray-900 rounded-lg p-4 mb-6 border-2 border-gray-600">
+            <div className="flex items-center gap-3">
+              <Skull className="w-8 h-8 text-red-400" />
+              <div className="flex-1">
+                <div className="font-bold text-red-400">⚠️ Hero is Weakened!</div>
+                <div className="text-sm text-gray-400">
+                  Weakness Level: {hero.weaknessLevel} | Complete {hero.weaknessLevel} task(s) to recover
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Streak Banner */}
         <div className="bg-gradient-to-r from-orange-800 to-red-800 rounded-lg p-4 mb-6 border-2 border-orange-400">
@@ -335,6 +514,7 @@ export default function App() {
               <h2 className="text-2xl font-bold flex items-center gap-2">
                 <Star className="text-yellow-400" />
                 {hero.name}
+                {hero.isWeakened && <Skull className="w-6 h-6 text-red-400" />}
               </h2>
               <div className="text-3xl font-bold text-yellow-400">
                 Lv.{hero.level}
@@ -397,25 +577,75 @@ export default function App() {
             </div>
 
             {/* Redeem Gaming Time */}
-            <div className="p-4 bg-gradient-to-r from-purple-700 to-pink-700 rounded-lg mb-4">
+            {!gamingSession.isActive && (
+              <div className="p-4 bg-gradient-to-r from-purple-700 to-pink-700 rounded-lg mb-4">
+                <h3 className="font-bold mb-2 flex items-center gap-2">
+                  <Zap className="text-yellow-400" />
+                  Start Gaming Session
+                </h3>
+                <div className="flex gap-2 mb-2">
+                  <button
+                    onClick={() => startGamingSession(30)}
+                    disabled={hero.gamingMinutes < 30}
+                    className="flex-1 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed py-2 px-3 rounded transition-all"
+                  >
+                    30 min
+                  </button>
+                  <button
+                    onClick={() => startGamingSession(60)}
+                    disabled={hero.gamingMinutes < 60}
+                    className="flex-1 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed py-2 px-3 rounded transition-all"
+                  >
+                    60 min
+                  </button>
+                  <button
+                    onClick={() => setShowCustomTime(!showCustomTime)}
+                    className="bg-purple-600 hover:bg-purple-500 py-2 px-3 rounded transition-all"
+                  >
+                    Custom
+                  </button>
+                </div>
+                {showCustomTime && (
+                  <div className="flex gap-2">
+                    <input
+                      type="number"
+                      min="1"
+                      max={hero.gamingMinutes}
+                      value={customMinutes}
+                      onChange={(e) => setCustomMinutes(parseInt(e.target.value) || 1)}
+                      className="flex-1 bg-slate-600 text-white px-3 py-2 rounded outline-none"
+                    />
+                    <button
+                      onClick={() => startGamingSession(customMinutes)}
+                      disabled={hero.gamingMinutes < customMinutes}
+                      className="bg-green-600 hover:bg-green-500 disabled:bg-gray-600 py-2 px-4 rounded transition-all"
+                    >
+                      Start
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Report Unauthorized Gaming */}
+            <div className="p-4 bg-red-900 rounded-lg mb-4">
               <h3 className="font-bold mb-2 flex items-center gap-2">
-                <Zap className="text-yellow-400" />
-                Redeem Gaming Time
+                <AlertTriangle className="text-yellow-400" />
+                Honesty Check
               </h3>
+              <p className="text-sm text-red-200 mb-2">Gamed without earning time?</p>
               <div className="flex gap-2">
                 <button
-                  onClick={() => spendGamingTime(30)}
-                  disabled={hero.gamingMinutes < 30}
-                  className="flex-1 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed py-2 px-3 rounded transition-all"
+                  onClick={() => reportUnauthorizedGaming(30)}
+                  className="flex-1 bg-red-700 hover:bg-red-600 py-2 px-3 rounded text-sm transition-all"
                 >
-                  30 min
+                  Report 30m
                 </button>
                 <button
-                  onClick={() => spendGamingTime(60)}
-                  disabled={hero.gamingMinutes < 60}
-                  className="flex-1 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed py-2 px-3 rounded transition-all"
+                  onClick={() => reportUnauthorizedGaming(60)}
+                  className="flex-1 bg-red-700 hover:bg-red-600 py-2 px-3 rounded text-sm transition-all"
                 >
-                  60 min
+                  Report 60m
                 </button>
               </div>
             </div>
@@ -457,7 +687,6 @@ export default function App() {
                   onKeyPress={(e) => e.key === 'Enter' && addCustomTask()}
                 />
                 
-                {/* Difficulty Select */}
                 <select
                   value={newTaskDifficulty}
                   onChange={(e) => setNewTaskDifficulty(e.target.value)}
@@ -470,7 +699,6 @@ export default function App() {
                   ))}
                 </select>
 
-                {/* Category Select */}
                 <select
                   value={newTaskCategory}
                   onChange={(e) => setNewTaskCategory(e.target.value)}
@@ -558,9 +786,27 @@ export default function App() {
 
         </div>
 
+        {/* Footer Stats */}
+        <div className="mt-6 grid grid-cols-3 gap-4 text-center text-sm">
+          <div className="bg-slate-800 rounded-lg p-3 border border-slate-700">
+            <div className="text-gray-400">Gaming Today</div>
+            <div className="text-xl font-bold text-blue-400">{gamingSession.totalGamingToday} min</div>
+          </div>
+          <div className="bg-slate-800 rounded-lg p-3 border border-slate-700">
+            <div className="text-gray-400">Daily Goal</div>
+            <div className="text-xl font-bold text-purple-400">{streaks.tasksCompletedToday}/{streaks.dailyGoal}</div>
+          </div>
+          <div className="bg-slate-800 rounded-lg p-3 border border-slate-700">
+            <div className="text-gray-400">Hero Status</div>
+            <div className="text-xl font-bold text-yellow-400">
+              {hero.isWeakened ? "Weakened" : "Strong"}
+            </div>
+          </div>
+        </div>
+
         {/* Footer Tips */}
         <div className="mt-6 text-center text-purple-300 text-sm">
-          <p>💡 Complete {streaks.dailyGoal} tasks daily to maintain your streak! Higher streaks = bigger rewards!</p>
+          <p>💡 Complete tasks to earn gaming time. Be honest - report unauthorized gaming to maintain accountability!</p>
         </div>
 
       </div>
